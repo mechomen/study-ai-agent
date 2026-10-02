@@ -1,0 +1,44 @@
+SMART NOTES BACKEND PATCH
+
+Do NOT replace your current working api_server.py. Add these two pieces to your existing backend so your current Agent Tools implementation stays intact.
+
+1) Add this Pydantic model near your other request models:
+
+class SmartNotesRequest(BaseModel):
+    topic: str
+
+2) Add this endpoint before the study-plan endpoints:
+
+@app.post("/api/smart-notes")
+def smart_notes(req: SmartNotesRequest):
+    topic = agent.normalize_topic(req.topic) or "General"
+    if not topic.strip():
+        raise HTTPException(status_code=400, detail="Topic cannot be empty.")
+
+    try:
+        database = agent.load_vector_database()
+        results = agent.search_pdf(topic, database)
+        if not results:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No study material found for {topic}."
+            )
+
+        context = agent.build_context(results)
+        notes = agent.summarize_topic(topic, context)
+        pages = sorted({item.get("page") for item in results if item.get("page") is not None})
+
+        return {
+            "status": "completed",
+            "topic": topic,
+            "notes": notes,
+            "source_pages": pages,
+            "message": f"Smart notes generated for {topic}."
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not generate smart notes: {exc}"
+        )

@@ -464,8 +464,10 @@ Login
 Example:
 
 ```markdown
-![Dashboard](screenshots/dashboard.png)
-```
+![Dashboard] <img width="1878" height="838" alt="AdobeExpressPhotos_40d5a346eb834dbbb7dad67997c323ea_Edited" src="https://github.com/user-attachments/assets/09bab6f4-6c77-4816-96e0-7f0379ac8429" />
+
+```<img width="1844" height="787" alt="Screenshot 2026-10-02 231924" src="https://github.com/user-attachments/assets/1278859a-9d20-4594-858c-915de6544205" />
+
 
 ---
 

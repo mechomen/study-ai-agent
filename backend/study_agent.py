@@ -2,7 +2,21 @@ import os
 import json
 import re
 from datetime import datetime
-import ollama
+try:
+    import ollama
+except ImportError:
+    ollama = None
+
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
+
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    SentenceTransformer = None
+
 import numpy as np
 from pypdf import PdfReader
 
@@ -11,16 +25,50 @@ from pypdf import PdfReader
 # CONFIGURATION
 # ============================================================
 
-CHAT_MODEL = "llama3.2"
-EMBED_MODEL = "nomic-embed-text"
+# Provider configuration
+# Local: AI_PROVIDER=ollama, EMBED_PROVIDER=ollama
+# Cloud: AI_PROVIDER=groq, EMBED_PROVIDER=sentence_transformers
+AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
+EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "ollama").strip().lower()
 
-PDF_FILE = "data/study.pdf"
-VECTOR_FILE = "storage/vectors.json"
+CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.2")
+EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+ST_EMBED_MODEL = os.getenv("ST_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+
+PDF_FILE = os.getenv("PDF_FILE", "data/study.pdf")
+VECTOR_FILE_OLLAMA = os.getenv("VECTOR_FILE_OLLAMA", "storage/vectors.json")
+VECTOR_FILE_ST = os.getenv("VECTOR_FILE_ST", "storage/vectors_sentence_transformer.json")
 MEMORY_FILE = "storage/student_memory.json"
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 TOP_K = 4
+
+_embedding_model = None
+_groq_client = None
+
+def _vector_file():
+    return VECTOR_FILE_ST if EMBED_PROVIDER in {"sentence_transformers", "sentence-transformer", "local"} else VECTOR_FILE_OLLAMA
+
+def _get_sentence_transformer():
+    global _embedding_model
+    if _embedding_model is None:
+        if SentenceTransformer is None:
+            raise RuntimeError("sentence-transformers is not installed.")
+        _embedding_model = SentenceTransformer(ST_EMBED_MODEL)
+    return _embedding_model
+
+def _get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        if Groq is None:
+            raise RuntimeError("groq is not installed.")
+        if not GROQ_API_KEY:
+            raise RuntimeError("GROQ_API_KEY is missing.")
+        _groq_client = Groq(api_key=GROQ_API_KEY)
+    return _groq_client
 
 
 # ============================================================
@@ -74,11 +122,16 @@ def create_chunks(pages):
 # ============================================================
 
 def create_embedding(text):
-    response = ollama.embed(
-        model=EMBED_MODEL,
-        input=text
-    )
+    """Create embeddings using the configured local/cloud provider."""
+    if EMBED_PROVIDER in {"sentence_transformers", "sentence-transformer", "local"}:
+        model = _get_sentence_transformer()
+        embedding = model.encode(text, normalize_embeddings=False, convert_to_numpy=True)
+        return embedding.tolist()
 
+    if ollama is None:
+        raise RuntimeError("Ollama is not installed. Set EMBED_PROVIDER=sentence_transformers.")
+
+    response = ollama.embed(model=EMBED_MODEL, input=text)
     return response["embeddings"][0]
 
 
@@ -109,15 +162,27 @@ def build_vector_database(chunks):
 
     os.makedirs("storage", exist_ok=True)
 
-    with open(VECTOR_FILE, "w", encoding="utf-8") as file:
+    with open(_vector_file(), "w", encoding="utf-8") as file:
         json.dump(database, file)
 
     print("Vector database saved.")
 
 
 def load_vector_database():
-    with open(VECTOR_FILE, "r", encoding="utf-8") as file:
+    with open(_vector_file(), "r", encoding="utf-8") as file:
         return json.load(file)
+
+
+def ensure_vector_database():
+    """Build the provider-specific vector database when it does not exist."""
+    if os.path.exists(_vector_file()):
+        return load_vector_database()
+    if not os.path.exists(PDF_FILE):
+        raise FileNotFoundError(f"Study PDF not found: {PDF_FILE}")
+    pages = load_pdf()
+    chunks = create_chunks(pages)
+    build_vector_database(chunks)
+    return load_vector_database()
 
 
 # ============================================================
@@ -188,19 +253,24 @@ def build_context(results):
 # ============================================================
 
 def ask_ollama(prompt, num_predict=512, temperature=0.3):
-    """Optimized Ollama wrapper with task-specific output limits."""
+    """Backward-compatible wrapper for Ollama locally or Groq in cloud."""
+    if AI_PROVIDER == "groq":
+        client = _get_groq_client()
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=num_predict,
+        )
+        return response.choices[0].message.content or ""
+
+    if ollama is None:
+        raise RuntimeError("Ollama is not installed. Set AI_PROVIDER=groq for cloud deployment.")
+
     response = ollama.chat(
         model=CHAT_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        options={
-            "temperature": temperature,
-            "num_predict": num_predict,
-        },
+        messages=[{"role": "user", "content": prompt}],
+        options={"temperature": temperature, "num_predict": num_predict},
     )
     return response["message"]["content"]
 
@@ -2157,7 +2227,7 @@ def main():
     # Load vector database
     # --------------------------------------------------------
 
-    if os.path.exists(VECTOR_FILE):
+    if os.path.exists(_vector_file()):
         print("\nLoading existing vector database...")
         database = load_vector_database()
         print(f"Loaded {len(database)} chunks.")

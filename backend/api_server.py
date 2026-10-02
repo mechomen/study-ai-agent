@@ -19,9 +19,25 @@ import study_agent as agent
 
 app = FastAPI(title="Study AI Agent API", version="1.0.0")
 
+# Local development + deployed frontend.
+# Set FRONTEND_URL in Render to your Vercel URL.
+_frontend_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+]
+_frontend_url = os.getenv("FRONTEND_URL", "").strip()
+if _frontend_url:
+    _frontend_origins.extend(
+        origin.strip().rstrip("/")
+        for origin in _frontend_url.split(",")
+        if origin.strip()
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"],
+    allow_origins=list(dict.fromkeys(_frontend_origins)),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,7 +52,10 @@ PENDING_QUIZZES: dict[str, dict[str, Any]] = {}
 
 AUTH_DB = Path(__file__).resolve().parent / "studyai_users.db"
 AUTH_TOKEN_TTL = 7 * 24 * 60 * 60
-AUTH_SECRET = os.getenv("STUDYAI_AUTH_SECRET", "studyai-local-development-secret-change-me")
+AUTH_SECRET = os.getenv("STUDYAI_AUTH_SECRET", "").strip()
+if not AUTH_SECRET:
+    # Local development remains convenient; Render should always set this secret.
+    AUTH_SECRET = "studyai-local-development-secret-change-me"
 
 
 def init_auth_db():
@@ -490,12 +509,12 @@ def execute_agent_action(req: AgentActionRequest, user=Depends(require_auth)):
         if tool == "search":
             if not question:
                 raise HTTPException(status_code=400, detail="Enter a question or search query.")
-            database = agent.load_vector_database()
+            database = agent.ensure_vector_database()
             results = agent.search_pdf(question, database)
             items = [{"page": r.get("page"), "score": round(float(r.get("score", 0)), 4), "text": r.get("text", "")} for r in results]
             return {"tool": tool, "status": "completed", "result": {"query": question, "results": items}}
 
-        database = agent.load_vector_database()
+        database = agent.ensure_vector_database()
         if not topic and question:
             topic = agent.normalize_topic(agent.extract_topic(question))
         topic = topic or "General"
@@ -537,7 +556,7 @@ def smart_notes(req: SmartNotesRequest, user=Depends(require_auth)):
     topic = agent.normalize_topic(topic) or req.topic.strip()
 
     try:
-        database = agent.load_vector_database()
+        database = agent.ensure_vector_database()
         search_results = agent.search_pdf(topic, database)
         context = agent.build_context(search_results)
     except Exception as exc:
@@ -617,7 +636,7 @@ def ask(req: AskRequest, user=Depends(require_auth)):
     topic = agent.normalize_topic(topic) or "General"
 
     try:
-        database = agent.load_vector_database()
+        database = agent.ensure_vector_database()
         search_results = agent.search_pdf(question, database)
         context = agent.build_context(search_results)
     except Exception:
@@ -673,7 +692,7 @@ def create_quiz(req: QuizRequest, user=Depends(require_auth)):
     m = memory()
 
     try:
-        database = agent.load_vector_database()
+        database = agent.ensure_vector_database()
         search_results = agent.search_pdf(topic, database)
         context = agent.build_context(search_results)
     except Exception:
@@ -903,7 +922,7 @@ def start_study_session(user=Depends(require_auth)):
     if task_type in {"review", "learn", "discover", "advanced"}:
         review = ""
         try:
-            database = agent.load_vector_database()
+            database = agent.ensure_vector_database()
             context = agent.search_pdf(topic, database)
             if context:
                 if task_type == "review":
@@ -935,7 +954,7 @@ def start_study_session(user=Depends(require_auth)):
     # Practice / assessment tasks: generate a quiz and return it to the UI.
     if task_type in {"practice", "assess"}:
         try:
-            database = agent.load_vector_database()
+            database = agent.ensure_vector_database()
             context = agent.search_pdf(topic, database)
         except Exception:
             context = ""
@@ -1005,7 +1024,7 @@ def autonomous_session(user=Depends(require_auth)):
     review = ""
     if topic != "general":
         try:
-            database = agent.load_vector_database()
+            database = agent.ensure_vector_database()
             context = agent.search_pdf(topic, database)
             if context:
                 review = agent.explain_topic(topic, context)

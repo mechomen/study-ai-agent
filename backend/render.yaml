@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: study-ai-agent-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api_server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: AI_PROVIDER
+        value: groq
+      - key: EMBED_PROVIDER
+        value: sentence_transformers
+      - key: ST_EMBED_MODEL
+        value: sentence-transformers/all-MiniLM-L6-v2
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        sync: false
+      - key: STUDYAI_AUTH_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        sync: false

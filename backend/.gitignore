@@ -1,0 +1,17 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+studyai_users.db
+*.db
+storage/users/
+storage/*.json
+storage/*.tmp
+.history/
+.vscode/
+.idea/
+node_modules/
+dist/
+build/

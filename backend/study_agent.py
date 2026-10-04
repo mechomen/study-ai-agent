@@ -13,9 +13,9 @@ except ImportError:
     Groq = None
 
 try:
-    from sentence_transformers import SentenceTransformer
+    from fastembed import TextEmbedding
 except ImportError:
-    SentenceTransformer = None
+    TextEmbedding = None
 
 import numpy as np
 from pypdf import PdfReader
@@ -27,7 +27,7 @@ from pypdf import PdfReader
 
 # Provider configuration
 # Local: AI_PROVIDER=ollama, EMBED_PROVIDER=ollama
-# Cloud: AI_PROVIDER=groq, EMBED_PROVIDER=sentence_transformers
+# Cloud: AI_PROVIDER=groq, EMBED_PROVIDER=fastembed
 AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
 EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "ollama").strip().lower()
 
@@ -35,11 +35,11 @@ CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.2")
 EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-ST_EMBED_MODEL = os.getenv("ST_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+FAST_EMBED_MODEL = os.getenv("FAST_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 
 PDF_FILE = os.getenv("PDF_FILE", "data/study.pdf")
 VECTOR_FILE_OLLAMA = os.getenv("VECTOR_FILE_OLLAMA", "storage/vectors.json")
-VECTOR_FILE_ST = os.getenv("VECTOR_FILE_ST", "storage/vectors_sentence_transformer.json")
+VECTOR_FILE_FASTEMBED = os.getenv("VECTOR_FILE_FASTEMBED", "storage/vectors_fastembed.json")
 MEMORY_FILE = "storage/student_memory.json"
 
 CHUNK_SIZE = 1000
@@ -50,14 +50,16 @@ _embedding_model = None
 _groq_client = None
 
 def _vector_file():
-    return VECTOR_FILE_ST if EMBED_PROVIDER in {"sentence_transformers", "sentence-transformer", "local"} else VECTOR_FILE_OLLAMA
+    if EMBED_PROVIDER in {"fastembed", "sentence_transformers", "sentence-transformer", "local"}:
+        return VECTOR_FILE_FASTEMBED
+    return VECTOR_FILE_OLLAMA
 
-def _get_sentence_transformer():
+def _get_fastembed_model():
     global _embedding_model
     if _embedding_model is None:
-        if SentenceTransformer is None:
-            raise RuntimeError("sentence-transformers is not installed.")
-        _embedding_model = SentenceTransformer(ST_EMBED_MODEL)
+        if TextEmbedding is None:
+            raise RuntimeError("fastembed is not installed.")
+        _embedding_model = TextEmbedding(model_name=FAST_EMBED_MODEL)
     return _embedding_model
 
 def _get_groq_client():
@@ -122,14 +124,13 @@ def create_chunks(pages):
 # ============================================================
 
 def create_embedding(text):
-    """Create embeddings using the configured local/cloud provider."""
-    if EMBED_PROVIDER in {"sentence_transformers", "sentence-transformer", "local"}:
-        model = _get_sentence_transformer()
-        embedding = model.encode(text, normalize_embeddings=False, convert_to_numpy=True)
-        return embedding.tolist()
+    """Create embeddings using FastEmbed (cloud) or Ollama (local)."""
+    if EMBED_PROVIDER in {"fastembed", "sentence_transformers", "sentence-transformer", "local"}:
+        model = _get_fastembed_model()
+        return list(model.embed([text]))[0].tolist()
 
     if ollama is None:
-        raise RuntimeError("Ollama is not installed. Set EMBED_PROVIDER=sentence_transformers.")
+        raise RuntimeError("Ollama is not installed. Set EMBED_PROVIDER=fastembed for cloud deployment.")
 
     response = ollama.embed(model=EMBED_MODEL, input=text)
     return response["embeddings"][0]
@@ -141,48 +142,57 @@ def create_embedding(text):
 
 def build_vector_database(chunks):
     print("\nCreating embeddings...")
-
     database = []
 
-    for i, chunk in enumerate(chunks):
-        print(
-            f"Embedding {i + 1}/{len(chunks)}",
-            end="\r"
-        )
-
-        embedding = create_embedding(chunk["text"])
-
-        database.append({
-            "page": chunk["page"],
-            "text": chunk["text"],
-            "embedding": embedding
-        })
+    if EMBED_PROVIDER in {"fastembed", "sentence_transformers", "sentence-transformer", "local"}:
+        model = _get_fastembed_model()
+        texts = [chunk["text"] for chunk in chunks]
+        embeddings = model.embed(texts, batch_size=8)
+        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings), start=1):
+            print(f"Embedding {i}/{len(chunks)}", end="\r")
+            database.append({
+                "page": chunk["page"],
+                "text": chunk["text"],
+                "embedding": embedding.tolist(),
+            })
+    else:
+        for i, chunk in enumerate(chunks, start=1):
+            print(f"Embedding {i}/{len(chunks)}", end="\r")
+            embedding = create_embedding(chunk["text"])
+            database.append({
+                "page": chunk["page"],
+                "text": chunk["text"],
+                "embedding": embedding
+            })
 
     print("\nEmbeddings created.")
-
     os.makedirs("storage", exist_ok=True)
-
     with open(_vector_file(), "w", encoding="utf-8") as file:
         json.dump(database, file)
-
     print("Vector database saved.")
 
 
 def load_vector_database():
-    with open(_vector_file(), "r", encoding="utf-8") as file:
+    path = _vector_file()
+    if not os.path.exists(path):
+        ensure_vector_database()
+    with open(path, "r", encoding="utf-8") as file:
         return json.load(file)
 
 
 def ensure_vector_database():
     """Build the provider-specific vector database when it does not exist."""
-    if os.path.exists(_vector_file()):
-        return load_vector_database()
+    path = _vector_file()
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as file:
+            return json.load(file)
     if not os.path.exists(PDF_FILE):
         raise FileNotFoundError(f"Study PDF not found: {PDF_FILE}")
     pages = load_pdf()
     chunks = create_chunks(pages)
     build_vector_database(chunks)
-    return load_vector_database()
+    with open(path, "r", encoding="utf-8") as file:
+        return json.load(file)
 
 
 # ============================================================

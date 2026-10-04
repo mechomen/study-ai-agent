@@ -33,7 +33,7 @@ EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "ollama").strip().lower()
 
 CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.2")
 EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 FAST_EMBED_MODEL = os.getenv("FAST_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 

@@ -426,8 +426,18 @@ def health():
 
 @app.get("/api/dashboard")
 def dashboard(user=Depends(require_auth)):
-    CURRENT_USER.set(user)
-    return dashboard_payload(user)
+    try:
+        CURRENT_USER.set(user)
+        return dashboard_payload(user)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Dashboard error: {type(exc).__name__}: {exc}",
+        )
 
 
 @app.get("/api/analytics")

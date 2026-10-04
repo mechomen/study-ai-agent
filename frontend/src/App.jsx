@@ -147,7 +147,7 @@ function App() {
       console.error("Dashboard error:", e);
       setError(
         e?.response?.data?.detail ||
-          "Could not connect to the FastAPI backend. Start it on port 8000."
+          "Could not connect to the Study AI backend. Please try again."
       );
     } finally {
       setLoading(false);
@@ -1845,3 +1845,4 @@ function ProgressView({
 }
 
 export default App;
+
